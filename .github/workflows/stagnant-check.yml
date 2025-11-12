@@ -2,8 +2,8 @@ name: Daily Stagnant Channel Check
 
 on:
   schedule:
-    # Runs at 8:00 AM UTC (9:00 AM CET) every day
-    - cron: '0 8 * * *'
+    # Runs at 9:30 AM UTC (10:30 AM CET) every day
+    - cron: '30 9 * * *'
   workflow_dispatch:  # Allows manual trigger from GitHub UI
 
 jobs:
