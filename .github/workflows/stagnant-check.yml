@@ -26,8 +26,7 @@ jobs:
     - name: Run stagnant channel check
       env:
         SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-        KV_REST_API_URL: ${{ secrets.KV_REST_API_URL }}
-        KV_REST_API_TOKEN: ${{ secrets.KV_REST_API_TOKEN }}
+        REDIS_URL: ${{ secrets.REDIS_URL }}
       run: |
         python stagnant_checker_vercel.py
 

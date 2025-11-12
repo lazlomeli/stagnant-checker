@@ -4,13 +4,20 @@ from datetime import datetime, timedelta
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 
-# Import KV storage for Vercel
+# Import Redis storage for Vercel
 try:
-    from vercel_kv import kv
-    USE_KV = True
+    import redis
+    REDIS_URL = os.environ.get("REDIS_URL")
+    if REDIS_URL:
+        r = redis.Redis.from_url(REDIS_URL)
+        USE_REDIS = True
+    else:
+        USE_REDIS = False
 except ImportError:
-    USE_KV = False
-    # Fallback to file-based storage
+    USE_REDIS = False
+
+# Fallback to file-based storage
+if not USE_REDIS:
     from file_utils import (
         load_json_with_lock,
         load_channel_cache,
@@ -27,30 +34,30 @@ CACHE_KEY = "channel_cache"
 
 # ---------- Storage Helpers ----------
 def load_data():
-    """Load user data from KV store or file."""
-    if USE_KV:
-        data = kv.get(DATA_KEY)
+    """Load user data from Redis or file."""
+    if USE_REDIS:
+        data = r.get(DATA_KEY)
         return json.loads(data) if data else {}
     else:
         return load_json_with_lock("user_data.json", {})
 
 def load_cache():
-    """Load channel cache from KV store or file."""
-    if USE_KV:
-        cache = kv.get(CACHE_KEY)
+    """Load channel cache from Redis or file."""
+    if USE_REDIS:
+        cache = r.get(CACHE_KEY)
         return json.loads(cache) if cache else {"channels": {}, "last_updated": None}
     else:
         return load_channel_cache()
 
 def save_cache(cache_data):
-    """Save channel cache to KV store or file."""
-    if USE_KV:
-        kv.set(CACHE_KEY, json.dumps(cache_data))
+    """Save channel cache to Redis or file."""
+    if USE_REDIS:
+        r.set(CACHE_KEY, json.dumps(cache_data))
     else:
         from file_utils import save_channel_cache
         save_channel_cache(cache_data)
 
-def is_cache_valid_kv(cache_data):
+def is_cache_valid_redis(cache_data):
     """Check if cache is valid."""
     if not cache_data.get("last_updated"):
         return False
@@ -60,7 +67,7 @@ def is_cache_valid_kv(cache_data):
     
     return last_updated > expiry_time
 
-def refresh_cache_kv():
+def refresh_cache_redis():
     """Refresh the entire channel cache."""
     channel_mapping = {}
     
@@ -97,8 +104,8 @@ def get_channel_id(channel_name):
     cache = load_cache()
     
     # Check if cache is valid
-    if USE_KV:
-        valid = is_cache_valid_kv(cache)
+    if USE_REDIS:
+        valid = is_cache_valid_redis(cache)
     else:
         valid = is_cache_valid(cache)
     
@@ -109,8 +116,8 @@ def get_channel_id(channel_name):
         print(f"Channel '{channel_name}' not in cache, attempting single lookup...")
     else:
         print("Cache expired or invalid, refreshing channel cache...")
-        if USE_KV:
-            channel_mapping = refresh_cache_kv()
+        if USE_REDIS:
+            channel_mapping = refresh_cache_redis()
         else:
             channel_mapping = refresh_full_cache(client)
         

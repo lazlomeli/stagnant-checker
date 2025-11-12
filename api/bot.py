@@ -5,13 +5,22 @@ from slack_bolt import App
 from slack_bolt.adapter.flask import SlackRequestHandler
 from flask import Flask, request
 
-# Import KV storage for Vercel
+# Import Redis storage for Vercel
 try:
-    from vercel_kv import kv
-    USE_KV = True
+    import redis
+    REDIS_URL = os.environ.get("REDIS_URL")
+    if REDIS_URL:
+        r = redis.Redis.from_url(REDIS_URL)
+        USE_REDIS = True
+    else:
+        USE_REDIS = False
 except ImportError:
-    USE_KV = False
-    # Fallback to file-based storage for local development
+    USE_REDIS = False
+
+# Fallback to file-based storage for local development
+if not USE_REDIS:
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from file_utils import load_json_with_lock, atomic_json_update
 
 SLACK_BOT_TOKEN = os.environ["SLACK_BOT_TOKEN"]
@@ -25,17 +34,17 @@ DATA_KEY = "user_data"
 
 # ---------- Storage Helpers ----------
 def load_data():
-    """Load user data from KV store or file."""
-    if USE_KV:
-        data = kv.get(DATA_KEY)
+    """Load user data from Redis or file."""
+    if USE_REDIS:
+        data = r.get(DATA_KEY)
         return json.loads(data) if data else {}
     else:
         return load_json_with_lock("user_data.json", {})
 
 def save_data(data):
-    """Save user data to KV store or file."""
-    if USE_KV:
-        kv.set(DATA_KEY, json.dumps(data))
+    """Save user data to Redis or file."""
+    if USE_REDIS:
+        r.set(DATA_KEY, json.dumps(data))
     else:
         def update(d):
             return data
