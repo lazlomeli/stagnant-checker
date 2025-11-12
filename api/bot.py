@@ -1,30 +1,17 @@
 import os
 import re
 import json
+import redis
 from slack_bolt import App
 from slack_bolt.adapter.flask import SlackRequestHandler
 from flask import Flask, request
 
-# Import Redis storage for Vercel
-try:
-    import redis
-    REDIS_URL = os.environ.get("REDIS_URL")
-    if REDIS_URL:
-        r = redis.Redis.from_url(REDIS_URL)
-        USE_REDIS = True
-    else:
-        USE_REDIS = False
-except ImportError:
-    USE_REDIS = False
-
-# Fallback to file-based storage for local development
-if not USE_REDIS:
-    import sys
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from file_utils import load_json_with_lock, atomic_json_update
-
 SLACK_BOT_TOKEN = os.environ["SLACK_BOT_TOKEN"]
 SLACK_SIGN_SECRET = os.environ["SLACK_SIGN_SECRET"]
+REDIS_URL = os.environ["REDIS_URL"]
+
+# Initialize Redis
+r = redis.Redis.from_url(REDIS_URL)
 
 app = App(token=SLACK_BOT_TOKEN, signing_secret=SLACK_SIGN_SECRET)
 flask_app = Flask(__name__)
@@ -34,21 +21,13 @@ DATA_KEY = "user_data"
 
 # ---------- Storage Helpers ----------
 def load_data():
-    """Load user data from Redis or file."""
-    if USE_REDIS:
-        data = r.get(DATA_KEY)
-        return json.loads(data) if data else {}
-    else:
-        return load_json_with_lock("user_data.json", {})
+    """Load user data from Redis."""
+    data = r.get(DATA_KEY)
+    return json.loads(data) if data else {}
 
 def save_data(data):
-    """Save user data to Redis or file."""
-    if USE_REDIS:
-        r.set(DATA_KEY, json.dumps(data))
-    else:
-        def update(d):
-            return data
-        atomic_json_update("user_data.json", update, {})
+    """Save user data to Redis."""
+    r.set(DATA_KEY, json.dumps(data))
 
 def validate_channel_name(channel_name):
     """
@@ -80,14 +59,22 @@ def validate_channel_name(channel_name):
 def add_channel(ack, respond, command):
     ack()
     user_id = command["user_id"]
-    text = command.get("text", "").strip().replace("#", "").lower()
+    text = command.get("text", "").strip()
     
-    if not text:
+    # Require # symbol
+    if not text.startswith("#"):
+        respond("Usage: `/watch #channel-name`\nPlease include the # symbol.")
+        return
+    
+    # Remove # and convert to lowercase
+    channel_name = text[1:].lower()
+    
+    if not channel_name:
         respond("Usage: `/watch #channel-name`")
         return
     
     # Validate channel name
-    is_valid, error_msg = validate_channel_name(text)
+    is_valid, error_msg = validate_channel_name(channel_name)
     if not is_valid:
         respond(f"❌ {error_msg}")
         return
@@ -96,26 +83,34 @@ def add_channel(ack, respond, command):
     data = load_data()
     user_data = data.get(user_id, {"channels": []})
     
-    if text in user_data["channels"]:
-        respond(f"Channel *#{text}* is already being monitored.")
+    if channel_name in user_data["channels"]:
+        respond(f"Channel *#{channel_name}* is already being monitored.")
     else:
-        user_data["channels"].append(text)
+        user_data["channels"].append(channel_name)
         data[user_id] = user_data
         save_data(data)
-        respond(f"✅ Added *#{text}* to your personal watchlist.")
+        respond(f"✅ Added *#{channel_name}* to your personal watchlist.")
 
 @app.command("/unwatch")
 def unwatch(ack, respond, command):
     ack()
     user_id = command["user_id"]
-    text = command.get("text", "").strip().replace("#", "").lower()
+    text = command.get("text", "").strip()
     
-    if not text:
+    # Require # symbol
+    if not text.startswith("#"):
+        respond("Usage: `/unwatch #channel-name`\nPlease include the # symbol.")
+        return
+    
+    # Remove # and convert to lowercase
+    channel_name = text[1:].lower()
+    
+    if not channel_name:
         respond("Usage: `/unwatch #channel-name`")
         return
     
     # Validate channel name
-    is_valid, error_msg = validate_channel_name(text)
+    is_valid, error_msg = validate_channel_name(channel_name)
     if not is_valid:
         respond(f"❌ {error_msg}")
         return
@@ -124,13 +119,13 @@ def unwatch(ack, respond, command):
     data = load_data()
     user_data = data.get(user_id, {"channels": []})
 
-    if text not in user_data["channels"]:
-        respond(f"Channel *#{text}* is not in your watchlist.")
+    if channel_name not in user_data["channels"]:
+        respond(f"Channel *#{channel_name}* is not in your watchlist.")
     else:
-        user_data["channels"].remove(text)
+        user_data["channels"].remove(channel_name)
         data[user_id] = user_data
         save_data(data)
-        respond(f"🗑️ Removed *#{text}* from your watchlist.")
+        respond(f"🗑️ Removed *#{channel_name}* from your watchlist.")
 
 @app.command("/list")
 def list_channels(ack, respond, command):
@@ -161,8 +156,3 @@ def list_route():
 
 # For Vercel serverless
 app_handler = flask_app
-
-# For local development
-if __name__ == "__main__":
-    flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 3000)))
-

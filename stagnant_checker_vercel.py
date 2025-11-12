@@ -1,32 +1,15 @@
 import os
 import json
+import redis
 from datetime import datetime, timedelta
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 
-# Import Redis storage for Vercel
-try:
-    import redis
-    REDIS_URL = os.environ.get("REDIS_URL")
-    if REDIS_URL:
-        r = redis.Redis.from_url(REDIS_URL)
-        USE_REDIS = True
-    else:
-        USE_REDIS = False
-except ImportError:
-    USE_REDIS = False
-
-# Fallback to file-based storage
-if not USE_REDIS:
-    from file_utils import (
-        load_json_with_lock,
-        load_channel_cache,
-        is_cache_valid,
-        refresh_full_cache,
-        update_channel_cache
-    )
-
 SLACK_BOT_TOKEN = os.environ["SLACK_BOT_TOKEN"]
+REDIS_URL = os.environ["REDIS_URL"]
+
+# Initialize Redis and Slack client
+r = redis.Redis.from_url(REDIS_URL)
 client = WebClient(token=SLACK_BOT_TOKEN)
 
 DATA_KEY = "user_data"
@@ -34,31 +17,21 @@ CACHE_KEY = "channel_cache"
 
 # ---------- Storage Helpers ----------
 def load_data():
-    """Load user data from Redis or file."""
-    if USE_REDIS:
-        data = r.get(DATA_KEY)
-        return json.loads(data) if data else {}
-    else:
-        return load_json_with_lock("user_data.json", {})
+    """Load user data from Redis."""
+    data = r.get(DATA_KEY)
+    return json.loads(data) if data else {}
 
 def load_cache():
-    """Load channel cache from Redis or file."""
-    if USE_REDIS:
-        cache = r.get(CACHE_KEY)
-        return json.loads(cache) if cache else {"channels": {}, "last_updated": None}
-    else:
-        return load_channel_cache()
+    """Load channel cache from Redis."""
+    cache = r.get(CACHE_KEY)
+    return json.loads(cache) if cache else {"channels": {}, "last_updated": None}
 
 def save_cache(cache_data):
-    """Save channel cache to Redis or file."""
-    if USE_REDIS:
-        r.set(CACHE_KEY, json.dumps(cache_data))
-    else:
-        from file_utils import save_channel_cache
-        save_channel_cache(cache_data)
+    """Save channel cache to Redis."""
+    r.set(CACHE_KEY, json.dumps(cache_data))
 
-def is_cache_valid_redis(cache_data):
-    """Check if cache is valid."""
+def is_cache_valid(cache_data):
+    """Check if cache is valid (not expired)."""
     if not cache_data.get("last_updated"):
         return False
     
@@ -67,8 +40,8 @@ def is_cache_valid_redis(cache_data):
     
     return last_updated > expiry_time
 
-def refresh_cache_redis():
-    """Refresh the entire channel cache."""
+def refresh_cache():
+    """Refresh the entire channel cache from Slack API."""
     channel_mapping = {}
     
     try:
@@ -100,27 +73,19 @@ def refresh_cache_redis():
 
 # ---------- Helpers ----------
 def get_channel_id(channel_name):
-    """Get channel ID with caching."""
+    """Get channel ID with caching to reduce API calls."""
     cache = load_cache()
     
     # Check if cache is valid
-    if USE_REDIS:
-        valid = is_cache_valid_redis(cache)
-    else:
-        valid = is_cache_valid(cache)
-    
-    if valid:
+    if is_cache_valid(cache):
         channel_id = cache["channels"].get(channel_name)
         if channel_id:
             return channel_id
         print(f"Channel '{channel_name}' not in cache, attempting single lookup...")
     else:
+        # Cache expired, refresh it
         print("Cache expired or invalid, refreshing channel cache...")
-        if USE_REDIS:
-            channel_mapping = refresh_cache_redis()
-        else:
-            channel_mapping = refresh_full_cache(client)
-        
+        channel_mapping = refresh_cache()
         if channel_mapping:
             return channel_mapping.get(channel_name)
         return None
@@ -136,7 +101,7 @@ def get_channel_id(channel_name):
             )
             for c in result["channels"]:
                 if c["name"] == channel_name:
-                    # Update cache
+                    # Update cache with this new channel
                     cache["channels"][channel_name] = c["id"]
                     save_cache(cache)
                     return c["id"]
@@ -150,6 +115,7 @@ def get_channel_id(channel_name):
     return None
 
 def get_latest_message(channel_id):
+    """Get the most recent message from a channel."""
     try:
         result = client.conversations_history(channel=channel_id, limit=1)
         if result["messages"]:
@@ -159,6 +125,7 @@ def get_latest_message(channel_id):
     return None
 
 def message_is_stagnant(message):
+    """Check if a message is stagnant (>2 days old with no replies)."""
     ts = float(message["ts"])
     msg_time = datetime.fromtimestamp(ts)
     two_days_ago = datetime.now() - timedelta(days=2)
@@ -166,6 +133,7 @@ def message_is_stagnant(message):
     return msg_time < two_days_ago and not has_replies
 
 def notify_user(user_id, report):
+    """Send a DM to a user with the stagnant channel report."""
     try:
         client.chat_postMessage(channel=user_id, text=report)
     except SlackApiError as e:
@@ -173,6 +141,7 @@ def notify_user(user_id, report):
 
 # ---------- Main ----------
 def run_check():
+    """Main function to check all users' watched channels for stagnation."""
     print("Running stagnant channel check...")
     data = load_data()
     if not data:
@@ -204,4 +173,3 @@ def run_check():
 
 if __name__ == "__main__":
     run_check()
-
