@@ -21,7 +21,7 @@ jobs:
     
     - name: Install dependencies
       run: |
-        pip install -r requirements-vercel.txt
+        pip install -r requirements.txt
     
     - name: Run stagnant channel check
       env:
