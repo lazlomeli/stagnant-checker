@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: stagnant-checker-bot
+    env: python
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python bot.py"
+    plan: free
+    envVars:
+      - key: SLACK_BOT_TOKEN
+        sync: false
+      - key: SLACK_SIGN_SECRET
+        sync: false
+
+  - type: cron
+    name: stagnant-checker-cron
+    env: python
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python stagnant_checker.py"
+    schedule: "0 9 * * *"
+    plan: free
+    envVars:
+      - key: SLACK_BOT_TOKEN
+        sync: false
