@@ -19,10 +19,6 @@
       "src": "/list",
       "dest": "api/bot.py"
     }
-  ],
-  "env": {
-    "SLACK_BOT_TOKEN": "@slack_bot_token",
-    "SLACK_SIGN_SECRET": "@slack_sign_secret"
-  }
+  ]
 }
 

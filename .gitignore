@@ -3,3 +3,4 @@
 .env.*
 user_data.json
 channel_cache.json
+.vercel
