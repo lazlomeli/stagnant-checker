@@ -1,0 +1,28 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "api/bot.py",
+      "use": "@vercel/python"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/watch",
+      "dest": "api/bot.py"
+    },
+    {
+      "src": "/unwatch",
+      "dest": "api/bot.py"
+    },
+    {
+      "src": "/list",
+      "dest": "api/bot.py"
+    }
+  ],
+  "env": {
+    "SLACK_BOT_TOKEN": "@slack_bot_token",
+    "SLACK_SIGN_SECRET": "@slack_sign_secret"
+  }
+}
+

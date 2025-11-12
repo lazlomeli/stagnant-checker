@@ -16,7 +16,7 @@ services:
     env: python
     buildCommand: "pip install -r requirements.txt"
     startCommand: "python stagnant_checker.py"
-    schedule: "0 9 * * *"
+    schedule: "0 8 * * *"  # 9 AM CET (8 AM UTC in winter, 7 AM UTC in summer for CEST)
     plan: free
     envVars:
       - key: SLACK_BOT_TOKEN

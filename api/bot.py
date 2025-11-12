@@ -1,12 +1,18 @@
 import os
 import re
+import json
 from slack_bolt import App
 from slack_bolt.adapter.flask import SlackRequestHandler
 from flask import Flask, request
-from dotenv import load_dotenv
-from file_utils import load_json_with_lock, atomic_json_update
 
-load_dotenv()
+# Import KV storage for Vercel
+try:
+    from vercel_kv import kv
+    USE_KV = True
+except ImportError:
+    USE_KV = False
+    # Fallback to file-based storage for local development
+    from file_utils import load_json_with_lock, atomic_json_update
 
 SLACK_BOT_TOKEN = os.environ["SLACK_BOT_TOKEN"]
 SLACK_SIGN_SECRET = os.environ["SLACK_SIGN_SECRET"]
@@ -15,12 +21,25 @@ app = App(token=SLACK_BOT_TOKEN, signing_secret=SLACK_SIGN_SECRET)
 flask_app = Flask(__name__)
 handler = SlackRequestHandler(app)
 
-DATA_FILE = "user_data.json"
+DATA_KEY = "user_data"
 
-# ---------- Helpers ----------
+# ---------- Storage Helpers ----------
 def load_data():
-    """Load user data with file locking to prevent race conditions."""
-    return load_json_with_lock(DATA_FILE, {})
+    """Load user data from KV store or file."""
+    if USE_KV:
+        data = kv.get(DATA_KEY)
+        return json.loads(data) if data else {}
+    else:
+        return load_json_with_lock("user_data.json", {})
+
+def save_data(data):
+    """Save user data to KV store or file."""
+    if USE_KV:
+        kv.set(DATA_KEY, json.dumps(data))
+    else:
+        def update(d):
+            return data
+        atomic_json_update("user_data.json", update, {})
 
 def validate_channel_name(channel_name):
     """
@@ -64,22 +83,16 @@ def add_channel(ack, respond, command):
         respond(f"❌ {error_msg}")
         return
 
-    # Atomic update to prevent race conditions
-    def add_channel_update(data):
-        user_data = data.get(user_id, {"channels": []})
-        if text not in user_data["channels"]:
-            user_data["channels"].append(text)
-            data[user_id] = user_data
-        return data
+    # Load, update, save
+    data = load_data()
+    user_data = data.get(user_id, {"channels": []})
     
-    # Check if already exists before updating
-    current_data = load_data()
-    user_channels = current_data.get(user_id, {}).get("channels", [])
-    
-    if text in user_channels:
+    if text in user_data["channels"]:
         respond(f"Channel *#{text}* is already being monitored.")
     else:
-        atomic_json_update(DATA_FILE, add_channel_update, {})
+        user_data["channels"].append(text)
+        data[user_id] = user_data
+        save_data(data)
         respond(f"✅ Added *#{text}* to your personal watchlist.")
 
 @app.command("/unwatch")
@@ -98,22 +111,16 @@ def unwatch(ack, respond, command):
         respond(f"❌ {error_msg}")
         return
     
-    # Atomic update to prevent race conditions
-    def remove_channel_update(data):
-        user_data = data.get(user_id, {"channels": []})
-        if text in user_data["channels"]:
-            user_data["channels"].remove(text)
-            data[user_id] = user_data
-        return data
-    
-    # Check if exists before updating
-    current_data = load_data()
-    user_channels = current_data.get(user_id, {}).get("channels", [])
-    
-    if text not in user_channels:
+    # Load, update, save
+    data = load_data()
+    user_data = data.get(user_id, {"channels": []})
+
+    if text not in user_data["channels"]:
         respond(f"Channel *#{text}* is not in your watchlist.")
     else:
-        atomic_json_update(DATA_FILE, remove_channel_update, {})
+        user_data["channels"].remove(text)
+        data[user_id] = user_data
+        save_data(data)
         respond(f"🗑️ Removed *#{text}* from your watchlist.")
 
 @app.command("/list")
@@ -125,20 +132,28 @@ def list_channels(ack, respond, command):
     channels = user_data["channels"]
 
     if not channels:
-        respond("You’re not monitoring any channels yet.")
+        respond("You're not monitoring any channels yet.")
     else:
         channels_list = "\n".join(f"• #{c}" for c in channels)
-        respond(f"👀 You’re currently monitoring:\n{channels_list}")
+        respond(f"👀 You're currently monitoring:\n{channels_list}")
 
-# ---------- Flask routes ----------
+# ---------- Flask routes for Vercel ----------
 @flask_app.route("/watch", methods=["POST"])
-def watch_route(): return handler.handle(request)
+def watch_route():
+    return handler.handle(request)
 
 @flask_app.route("/unwatch", methods=["POST"])
-def unwatch_route(): return handler.handle(request)
+def unwatch_route():
+    return handler.handle(request)
 
 @flask_app.route("/list", methods=["POST"])
-def list_route(): return handler.handle(request)
+def list_route():
+    return handler.handle(request)
 
+# For Vercel serverless
+app_handler = flask_app
+
+# For local development
 if __name__ == "__main__":
     flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 3000)))
+
