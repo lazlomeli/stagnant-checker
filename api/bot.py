@@ -10,8 +10,13 @@ SLACK_BOT_TOKEN = os.environ["SLACK_BOT_TOKEN"]
 SLACK_SIGN_SECRET = os.environ["SLACK_SIGN_SECRET"]
 REDIS_URL = os.environ["REDIS_URL"]
 
-# Initialize Redis
-r = redis.Redis.from_url(REDIS_URL)
+# Initialize Redis with connection timeout
+r = redis.Redis.from_url(
+    REDIS_URL,
+    socket_connect_timeout=5,
+    socket_timeout=5,
+    decode_responses=False
+)
 
 app = App(token=SLACK_BOT_TOKEN, signing_secret=SLACK_SIGN_SECRET)
 flask_app = Flask(__name__)
@@ -21,9 +26,13 @@ DATA_KEY = "user_data"
 
 # ---------- Storage Helpers ----------
 def load_data():
-    """Load user data from Redis."""
-    data = r.get(DATA_KEY)
-    return json.loads(data) if data else {}
+    """Load user data from Redis with error handling."""
+    try:
+        data = r.get(DATA_KEY)
+        return json.loads(data) if data else {}
+    except Exception as e:
+        print(f"Error loading data from Redis: {e}")
+        return {}
 
 def save_data(data):
     """Save user data to Redis."""
@@ -86,9 +95,18 @@ def add_channel(ack, respond, command):
     if channel_name in user_data["channels"]:
         respond(f"Channel *#{channel_name}* is already being monitored.")
     else:
+        # Limit: 50 channels per user
+        if len(user_data["channels"]) >= 50:
+            respond("❌ You've reached the maximum of 50 monitored channels.")
+            return
+        
         user_data["channels"].append(channel_name)
         data[user_id] = user_data
-        save_data(data)
+        
+        if not save_data(data):
+            respond("❌ Error saving data. Please try again.")
+            return
+        
         respond(f"✅ Added *#{channel_name}* to your personal watchlist.")
 
 @app.command("/unwatch")
@@ -124,7 +142,11 @@ def unwatch(ack, respond, command):
     else:
         user_data["channels"].remove(channel_name)
         data[user_id] = user_data
-        save_data(data)
+        
+        if not save_data(data):
+            respond("❌ Error saving data. Please try again.")
+            return
+        
         respond(f"🗑️ Removed *#{channel_name}* from your watchlist.")
 
 @app.command("/list")

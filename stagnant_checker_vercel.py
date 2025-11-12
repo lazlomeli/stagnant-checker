@@ -8,8 +8,13 @@ from slack_sdk.errors import SlackApiError
 SLACK_BOT_TOKEN = os.environ["SLACK_BOT_TOKEN"]
 REDIS_URL = os.environ["REDIS_URL"]
 
-# Initialize Redis and Slack client
-r = redis.Redis.from_url(REDIS_URL)
+# Initialize Redis with connection timeout and Slack client
+r = redis.Redis.from_url(
+    REDIS_URL,
+    socket_connect_timeout=5,
+    socket_timeout=5,
+    decode_responses=False
+)
 client = WebClient(token=SLACK_BOT_TOKEN)
 
 DATA_KEY = "user_data"
