@@ -2,7 +2,6 @@ import os
 import re
 import json
 import logging
-import traceback
 import redis
 from slack_bolt import App
 
