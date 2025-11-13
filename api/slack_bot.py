@@ -1,9 +1,22 @@
+print(">>> slack_bot.py STARTED IMPORTING", flush=True)
+
 import os
+print(">>> imported os", flush=True)
+
 import re
+print(">>> imported re", flush=True)
+
 import json
+print(">>> imported json", flush=True)
+
 import logging
+print(">>> imported logging", flush=True)
+
 import redis
+print(">>> imported redis", flush=True)
+
 from slack_bolt import App
+print(">>> imported slack_bolt.App", flush=True)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -15,12 +28,16 @@ DATA_KEY = "user_data"
 
 
 def get_redis():
+    print(">>> get_redis() called", flush=True)
     url = os.environ.get("REDIS_URL")
+    print(f">>> REDIS_URL = {url}", flush=True)
+
     if not url:
         logger.warning("REDIS_URL missing")
         return None
 
     try:
+        print(">>> Attempting Redis connection", flush=True)
         r = redis.Redis.from_url(
             url,
             socket_connect_timeout=5,
@@ -28,108 +45,44 @@ def get_redis():
             decode_responses=False,
         )
         r.ping()
+        print(">>> Redis connected successfully", flush=True)
         return r
     except Exception as e:
+        print(f">>> Redis ERROR: {e}", flush=True)
         logger.error(f"Redis error: {e}")
         return None
 
 
 def validate_channel_name(name):
-    if not name:
-        return False, "Channel name cannot be empty"
-    if not re.match(r"^[a-z0-9\-_]{1,80}$", name):
-        return False, (
-            "Invalid channel name. Channel names must:\n"
-            "• Be 1-80 characters long\n"
-            "• Only contain lowercase letters, numbers, hyphens, and underscores"
-        )
-    return True, None
+    return True, None  # keep simple for debugging
 
 
 def register_commands(app, r):
+    print(">>> register_commands() called", flush=True)
     @app.command("/watch")
     def watch_cmd(ack, respond, command):
         ack()
-        user_id = command["user_id"]
-        text = command.get("text", "").strip()
-
-        if not text.startswith("#"):
-            respond("Usage: /watch #channel")
-            return
-
-        channel = text[1:].lower()
-        ok, msg = validate_channel_name(channel)
-
-        if not ok:
-            respond(f"❌ {msg}")
-            return
-
-        data = load_data(r)
-        user = data.get(user_id, {"channels": []})
-
-        if channel in user["channels"]:
-            respond(f"Already watching #{channel}")
-            return
-
-        user["channels"].append(channel)
-        data[user_id] = user
-
-        if not save_data(r, data):
-            respond("Redis error")
-            return
-
-        respond(f"Watching #{channel}")
+        respond("debug watch ok")
 
     @app.command("/unwatch")
     def unwatch_cmd(ack, respond, command):
         ack()
-        user_id = command["user_id"]
-        text = command.get("text", "").strip()
-
-        if not text.startswith("#"):
-            respond("Usage: /unwatch #channel")
-            return
-
-        channel = text[1:].lower()
-
-        data = load_data(r)
-        user = data.get(user_id, {"channels": []})
-
-        if channel not in user["channels"]:
-            respond(f"#{channel} is not watched")
-            return
-
-        user["channels"].remove(channel)
-        data[user_id] = user
-
-        if not save_data(r, data):
-            respond("Redis error")
-            return
-
-        respond(f"Unwatched #{channel}")
+        respond("debug unwatch ok")
 
     @app.command("/list")
     def list_cmd(ack, respond, command):
         ack()
-        user_id = command["user_id"]
-
-        data = load_data(r)
-        user = data.get(user_id, {"channels": []})
-
-        if not user["channels"]:
-            respond("No watched channels")
-            return
-
-        items = "\n".join(f"• #{c}" for c in user["channels"])
-        respond(f"Watched channels:\n{items}")
+        respond("debug list ok")
 
 
 def load_data(r):
+    print(">>> load_data() called", flush=True)
     raw = r.get(DATA_KEY)
     return json.loads(raw) if raw else {}
 
 
 def save_data(r, data):
+    print(">>> save_data() called", flush=True)
     try:
         r.set(DATA_KEY, json.dumps(data))
         return True
@@ -138,16 +91,25 @@ def save_data(r, data):
 
 
 def create_bolt_handler():
-    """Factory for Vercel serverless calls."""
-    logger.info("Initializing Bolt App")
+    print(">>> create_bolt_handler() called", flush=True)
 
+    print(">>> Creating Bolt App...", flush=True)
     app = App(
         token=os.environ.get("SLACK_BOT_TOKEN"),
         signing_secret=os.environ.get("SLACK_SIGN_SECRET"),
     )
+    print(">>> Bolt App initialized", flush=True)
 
     r = get_redis()
-    register_commands(app, r)
+    print(">>> Redis instance =", r, flush=True)
 
+    register_commands(app, r)
+    print(">>> Commands registered", flush=True)
+
+    print(">>> Creating SlackRequestHandler...", flush=True)
     from slack_bolt.adapter.flask import SlackRequestHandler
-    return SlackRequestHandler(app)
+    handler = SlackRequestHandler(app)
+    print(">>> SlackRequestHandler created", flush=True)
+
+    print(">>> slack_bot.py IMPORT COMPLETED", flush=True)
+    return handler
