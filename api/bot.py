@@ -6,21 +6,31 @@ from slack_bolt import App
 from slack_bolt.adapter.flask import SlackRequestHandler
 from flask import Flask, request
 
-SLACK_BOT_TOKEN = os.environ["SLACK_BOT_TOKEN"]
-SLACK_SIGN_SECRET = os.environ["SLACK_SIGN_SECRET"]
-REDIS_URL = os.environ["REDIS_URL"]
+SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN", "")
+SLACK_SIGN_SECRET = os.environ.get("SLACK_SIGN_SECRET", "")
+REDIS_URL = os.environ.get("REDIS_URL", "")
 
 # Initialize Redis with connection timeout
-r = redis.Redis.from_url(
-    REDIS_URL,
-    socket_connect_timeout=5,
-    socket_timeout=5,
-    decode_responses=False
-)
+try:
+    r = redis.Redis.from_url(
+        REDIS_URL,
+        socket_connect_timeout=5,
+        socket_timeout=5,
+        decode_responses=False
+    ) if REDIS_URL else None
+except Exception as e:
+    print(f"Redis connection error: {e}")
+    r = None
 
-app = App(token=SLACK_BOT_TOKEN, signing_secret=SLACK_SIGN_SECRET)
+# Initialize Slack App (may fail if token is invalid, but won't crash)
+try:
+    app = App(token=SLACK_BOT_TOKEN, signing_secret=SLACK_SIGN_SECRET)
+except Exception as e:
+    print(f"Slack App initialization error: {e}")
+    # Create a dummy app to prevent crashes
+    app = None
 flask_app = Flask(__name__)
-handler = SlackRequestHandler(app)
+handler = SlackRequestHandler(app) if app else None
 
 DATA_KEY = "user_data"
 
@@ -164,16 +174,32 @@ def list_channels(ack, respond, command):
         respond(f"👀 You're currently monitoring:\n{channels_list}")
 
 # ---------- Flask routes for Vercel ----------
+@flask_app.route("/", methods=["GET"])
+def health_check():
+    """Health check endpoint."""
+    status = {
+        "status": "running",
+        "slack_configured": bool(SLACK_BOT_TOKEN and app),
+        "redis_configured": bool(REDIS_URL and r),
+    }
+    return status, 200
+
 @flask_app.route("/watch", methods=["POST"])
 def watch_route():
+    if not handler:
+        return {"error": "Slack app not configured. Please check SLACK_BOT_TOKEN and SLACK_SIGN_SECRET."}, 503
     return handler.handle(request)
 
 @flask_app.route("/unwatch", methods=["POST"])
 def unwatch_route():
+    if not handler:
+        return {"error": "Slack app not configured. Please check SLACK_BOT_TOKEN and SLACK_SIGN_SECRET."}, 503
     return handler.handle(request)
 
 @flask_app.route("/list", methods=["POST"])
 def list_route():
+    if not handler:
+        return {"error": "Slack app not configured. Please check SLACK_BOT_TOKEN and SLACK_SIGN_SECRET."}, 503
     return handler.handle(request)
 
 # For Vercel serverless
