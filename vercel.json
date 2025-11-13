@@ -8,15 +8,7 @@
   ],
   "routes": [
     {
-      "src": "/watch",
-      "dest": "api/bot.py"
-    },
-    {
-      "src": "/unwatch",
-      "dest": "api/bot.py"
-    },
-    {
-      "src": "/list",
+      "src": "/(.*)",
       "dest": "api/bot.py"
     }
   ]

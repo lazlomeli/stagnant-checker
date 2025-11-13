@@ -1,18 +1,31 @@
-import os
-import re
-import json
-import redis
-import logging
-import traceback
+# Print immediately to stdout AND stderr (before any imports)
 import sys
-from slack_bolt import App
-from slack_bolt.adapter.flask import SlackRequestHandler
-from flask import Flask, request
+print("=" * 80, file=sys.stderr, flush=True)
+print("=" * 80, file=sys.stdout, flush=True)
+print("BOT.PY MODULE LOADING STARTED", file=sys.stderr, flush=True)
+print("BOT.PY MODULE LOADING STARTED", file=sys.stdout, flush=True)
+print("=" * 80, file=sys.stderr, flush=True)
+print("=" * 80, file=sys.stdout, flush=True)
 
-# Print immediately to stdout (before logging setup)
-print("=" * 80, flush=True)
-print("BOT.PY MODULE LOADING STARTED", flush=True)
-print("=" * 80, flush=True)
+try:
+    import os
+    import re
+    import json
+    import redis
+    import logging
+    import traceback
+    from slack_bolt import App
+    from slack_bolt.adapter.flask import SlackRequestHandler
+    from flask import Flask, request
+    
+    print("✓ All imports successful", file=sys.stderr, flush=True)
+    print("✓ All imports successful", file=sys.stdout, flush=True)
+except Exception as e:
+    print(f"✗ IMPORT ERROR: {e}", file=sys.stderr, flush=True)
+    print(f"✗ IMPORT ERROR: {e}", file=sys.stdout, flush=True)
+    print(traceback.format_exc(), file=sys.stderr, flush=True)
+    print(traceback.format_exc(), file=sys.stdout, flush=True)
+    raise
 
 # Configure logging
 logging.basicConfig(
@@ -398,10 +411,16 @@ def list_route():
         logger.error(traceback.format_exc())
         raise
 
-# For Vercel serverless
+# For Vercel serverless - export the Flask app
 app_handler = flask_app
 
-print("=" * 80, flush=True)
-print("✓ BOT.PY MODULE LOADED SUCCESSFULLY", flush=True)
-print("=" * 80, flush=True)
+print("=" * 80, file=sys.stderr, flush=True)
+print("=" * 80, file=sys.stdout, flush=True)
+print("✓ BOT.PY MODULE LOADED SUCCESSFULLY", file=sys.stderr, flush=True)
+print("✓ BOT.PY MODULE LOADED SUCCESSFULLY", file=sys.stdout, flush=True)
+print(f"✓ Flask app: {flask_app}", file=sys.stderr, flush=True)
+print(f"✓ Handler: {handler}", file=sys.stderr, flush=True)
+print(f"✓ App: {app}", file=sys.stderr, flush=True)
+print("=" * 80, file=sys.stderr, flush=True)
+print("=" * 80, file=sys.stdout, flush=True)
 logger.info("Bot module loaded successfully and ready to serve requests")
