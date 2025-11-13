@@ -4,9 +4,15 @@ import json
 import redis
 import logging
 import traceback
+import sys
 from slack_bolt import App
 from slack_bolt.adapter.flask import SlackRequestHandler
 from flask import Flask, request
+
+# Print immediately to stdout (before logging setup)
+print("=" * 80, flush=True)
+print("BOT.PY MODULE LOADING STARTED", flush=True)
+print("=" * 80, flush=True)
 
 # Configure logging
 logging.basicConfig(
@@ -16,11 +22,19 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+print("Logging configured", flush=True)
+
 SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN", "")
 SLACK_SIGN_SECRET = os.environ.get("SLACK_SIGN_SECRET", "")
 REDIS_URL = os.environ.get("REDIS_URL", "")
 
+print(f"Environment variables loaded:", flush=True)
+print(f"  - SLACK_BOT_TOKEN: {'✓ Present' if SLACK_BOT_TOKEN else '✗ Missing'}", flush=True)
+print(f"  - SLACK_SIGN_SECRET: {'✓ Present' if SLACK_SIGN_SECRET else '✗ Missing'}", flush=True)
+print(f"  - REDIS_URL: {'✓ Present' if REDIS_URL else '✗ Missing'}", flush=True)
+
 # Initialize Redis with connection timeout
+print("Initializing Redis connection...", flush=True)
 logger.info("Initializing Redis connection...")
 try:
     r = redis.Redis.from_url(
@@ -30,26 +44,38 @@ try:
         decode_responses=False
     ) if REDIS_URL else None
     if r:
+        print("✓ Redis connection initialized successfully", flush=True)
         logger.info("Redis connection initialized successfully")
     else:
+        print("⚠ Redis URL not provided, Redis is disabled", flush=True)
         logger.warning("Redis URL not provided, Redis is disabled")
 except Exception as e:
+    print(f"✗ Redis connection error: {e}", flush=True)
     logger.error(f"Redis connection error: {e}")
     logger.debug(traceback.format_exc())
     r = None
 
 # Initialize Slack App (may fail if token is invalid, but won't crash)
+print("Initializing Slack App...", flush=True)
 logger.info("Initializing Slack App...")
 try:
+    if not SLACK_BOT_TOKEN or not SLACK_SIGN_SECRET:
+        raise ValueError("SLACK_BOT_TOKEN or SLACK_SIGN_SECRET not provided")
     app = App(token=SLACK_BOT_TOKEN, signing_secret=SLACK_SIGN_SECRET)
+    print("✓ Slack App initialized successfully", flush=True)
     logger.info("Slack App initialized successfully")
 except Exception as e:
+    print(f"✗ Slack App initialization error: {e}", flush=True)
+    print(f"✗ Full traceback: {traceback.format_exc()}", flush=True)
     logger.error(f"Slack App initialization error: {e}")
     logger.debug(traceback.format_exc())
     # Create a dummy app to prevent crashes
     app = None
+
+print("Creating Flask app...", flush=True)
 flask_app = Flask(__name__)
 handler = SlackRequestHandler(app) if app else None
+print(f"Handler created: {handler is not None}", flush=True)
 
 DATA_KEY = "user_data"
 
@@ -116,182 +142,191 @@ def validate_channel_name(channel_name):
     return True, None
 
 # ---------- Commands ----------
-@app.command("/watch")
-def add_channel(ack, respond, command):
-    try:
-        logger.info("=== /watch command received ===")
-        logger.info(f"Command payload: {json.dumps(command, default=str)}")
-        
-        ack()
-        logger.info("Command acknowledged")
-        
-        user_id = command["user_id"]
-        text = command.get("text", "").strip()
-        logger.info(f"User ID: {user_id}, Text: '{text}'")
-        
-        # Require # symbol
-        if not text.startswith("#"):
-            logger.warning(f"Invalid format - missing # symbol: '{text}'")
-            respond("Usage: `/watch #channel-name`\nPlease include the # symbol.")
-            return
-        
-        # Remove # and convert to lowercase
-        channel_name = text[1:].lower()
-        logger.info(f"Parsed channel name: '{channel_name}'")
-        
-        if not channel_name:
-            logger.warning("Empty channel name provided")
-            respond("Usage: `/watch #channel-name`")
-            return
-        
-        # Validate channel name
-        is_valid, error_msg = validate_channel_name(channel_name)
-        if not is_valid:
-            logger.warning(f"Invalid channel name: {error_msg}")
-            respond(f"❌ {error_msg}")
-            return
-        
-        logger.info("Channel name validated successfully")
+print("Registering Slack commands...", flush=True)
 
-        # Load, update, save
-        logger.info("Loading existing data...")
-        data = load_data()
-        user_data = data.get(user_id, {"channels": []})
-        logger.info(f"User currently monitoring {len(user_data['channels'])} channels")
-        
-        if channel_name in user_data["channels"]:
-            logger.info(f"Channel #{channel_name} already in watchlist")
-            respond(f"Channel *#{channel_name}* is already being monitored.")
-        else:
-            # Limit: 50 channels per user
-            if len(user_data["channels"]) >= 50:
-                logger.warning(f"User {user_id} has reached channel limit")
-                respond("❌ You've reached the maximum of 50 monitored channels.")
+# Only register commands if app is initialized
+if app:
+    @app.command("/watch")
+    def add_channel(ack, respond, command):
+        try:
+            logger.info("=== /watch command received ===")
+            logger.info(f"Command payload: {json.dumps(command, default=str)}")
+            
+            ack()
+            logger.info("Command acknowledged")
+            
+            user_id = command["user_id"]
+            text = command.get("text", "").strip()
+            logger.info(f"User ID: {user_id}, Text: '{text}'")
+            
+            # Require # symbol
+            if not text.startswith("#"):
+                logger.warning(f"Invalid format - missing # symbol: '{text}'")
+                respond("Usage: `/watch #channel-name`\nPlease include the # symbol.")
                 return
             
-            logger.info(f"Adding channel #{channel_name} to watchlist...")
-            user_data["channels"].append(channel_name)
-            data[user_id] = user_data
+            # Remove # and convert to lowercase
+            channel_name = text[1:].lower()
+            logger.info(f"Parsed channel name: '{channel_name}'")
             
-            if not save_data(data):
-                logger.error("Failed to save data to Redis")
-                respond("❌ Error saving data. Please try again.")
+            if not channel_name:
+                logger.warning("Empty channel name provided")
+                respond("Usage: `/watch #channel-name`")
                 return
             
-            logger.info(f"✅ Successfully added #{channel_name} for user {user_id}")
-            respond(f"✅ Added *#{channel_name}* to your personal watchlist.")
-    
-    except Exception as e:
-        logger.error(f"FATAL ERROR in /watch command: {e}")
-        logger.error(traceback.format_exc())
-        try:
-            respond(f"❌ An unexpected error occurred. Please try again or contact support.\nError: {str(e)}")
-        except:
-            logger.error("Failed to send error response to user")
-        raise
-
-@app.command("/unwatch")
-def unwatch(ack, respond, command):
-    try:
-        logger.info("=== /unwatch command received ===")
-        logger.info(f"Command payload: {json.dumps(command, default=str)}")
-        
-        ack()
-        logger.info("Command acknowledged")
-        
-        user_id = command["user_id"]
-        text = command.get("text", "").strip()
-        logger.info(f"User ID: {user_id}, Text: '{text}'")
-        
-        # Require # symbol
-        if not text.startswith("#"):
-            logger.warning(f"Invalid format - missing # symbol: '{text}'")
-            respond("Usage: `/unwatch #channel-name`\nPlease include the # symbol.")
-            return
-        
-        # Remove # and convert to lowercase
-        channel_name = text[1:].lower()
-        logger.info(f"Parsed channel name: '{channel_name}'")
-        
-        if not channel_name:
-            logger.warning("Empty channel name provided")
-            respond("Usage: `/unwatch #channel-name`")
-            return
-        
-        # Validate channel name
-        is_valid, error_msg = validate_channel_name(channel_name)
-        if not is_valid:
-            logger.warning(f"Invalid channel name: {error_msg}")
-            respond(f"❌ {error_msg}")
-            return
-        
-        logger.info("Channel name validated successfully")
-        
-        # Load, update, save
-        logger.info("Loading existing data...")
-        data = load_data()
-        user_data = data.get(user_id, {"channels": []})
-        logger.info(f"User currently monitoring {len(user_data['channels'])} channels")
-
-        if channel_name not in user_data["channels"]:
-            logger.info(f"Channel #{channel_name} not in watchlist")
-            respond(f"Channel *#{channel_name}* is not in your watchlist.")
-        else:
-            logger.info(f"Removing channel #{channel_name} from watchlist...")
-            user_data["channels"].remove(channel_name)
-            data[user_id] = user_data
-            
-            if not save_data(data):
-                logger.error("Failed to save data to Redis")
-                respond("❌ Error saving data. Please try again.")
+            # Validate channel name
+            is_valid, error_msg = validate_channel_name(channel_name)
+            if not is_valid:
+                logger.warning(f"Invalid channel name: {error_msg}")
+                respond(f"❌ {error_msg}")
                 return
             
-            logger.info(f"✅ Successfully removed #{channel_name} for user {user_id}")
-            respond(f"🗑️ Removed *#{channel_name}* from your watchlist.")
-    
-    except Exception as e:
-        logger.error(f"FATAL ERROR in /unwatch command: {e}")
-        logger.error(traceback.format_exc())
-        try:
-            respond(f"❌ An unexpected error occurred. Please try again or contact support.\nError: {str(e)}")
-        except:
-            logger.error("Failed to send error response to user")
-        raise
+            logger.info("Channel name validated successfully")
 
-@app.command("/list")
-def list_channels(ack, respond, command):
-    try:
-        logger.info("=== /list command received ===")
-        logger.info(f"Command payload: {json.dumps(command, default=str)}")
+            # Load, update, save
+            logger.info("Loading existing data...")
+            data = load_data()
+            user_data = data.get(user_id, {"channels": []})
+            logger.info(f"User currently monitoring {len(user_data['channels'])} channels")
+            
+            if channel_name in user_data["channels"]:
+                logger.info(f"Channel #{channel_name} already in watchlist")
+                respond(f"Channel *#{channel_name}* is already being monitored.")
+            else:
+                # Limit: 50 channels per user
+                if len(user_data["channels"]) >= 50:
+                    logger.warning(f"User {user_id} has reached channel limit")
+                    respond("❌ You've reached the maximum of 50 monitored channels.")
+                    return
+                
+                logger.info(f"Adding channel #{channel_name} to watchlist...")
+                user_data["channels"].append(channel_name)
+                data[user_id] = user_data
+                
+                if not save_data(data):
+                    logger.error("Failed to save data to Redis")
+                    respond("❌ Error saving data. Please try again.")
+                    return
+                
+                logger.info(f"✅ Successfully added #{channel_name} for user {user_id}")
+                respond(f"✅ Added *#{channel_name}* to your personal watchlist.")
         
-        ack()
-        logger.info("Command acknowledged")
-        
-        user_id = command["user_id"]
-        logger.info(f"User ID: {user_id}")
-        
-        logger.info("Loading existing data...")
-        data = load_data()
-        user_data = data.get(user_id, {"channels": []})
-        channels = user_data["channels"]
-        logger.info(f"User is monitoring {len(channels)} channels")
+        except Exception as e:
+            logger.error(f"FATAL ERROR in /watch command: {e}")
+            logger.error(traceback.format_exc())
+            try:
+                respond(f"❌ An unexpected error occurred. Please try again or contact support.\nError: {str(e)}")
+            except:
+                logger.error("Failed to send error response to user")
+            raise
 
-        if not channels:
-            logger.info("User has no channels in watchlist")
-            respond("You're not monitoring any channels yet.")
-        else:
-            channels_list = "\n".join(f"• #{c}" for c in channels)
-            logger.info(f"Sending list of {len(channels)} channels to user")
-            respond(f"👀 You're currently monitoring:\n{channels_list}")
-    
-    except Exception as e:
-        logger.error(f"FATAL ERROR in /list command: {e}")
-        logger.error(traceback.format_exc())
+    @app.command("/unwatch")
+    def unwatch(ack, respond, command):
         try:
-            respond(f"❌ An unexpected error occurred. Please try again or contact support.\nError: {str(e)}")
-        except:
-            logger.error("Failed to send error response to user")
-        raise
+            logger.info("=== /unwatch command received ===")
+            logger.info(f"Command payload: {json.dumps(command, default=str)}")
+            
+            ack()
+            logger.info("Command acknowledged")
+            
+            user_id = command["user_id"]
+            text = command.get("text", "").strip()
+            logger.info(f"User ID: {user_id}, Text: '{text}'")
+            
+            # Require # symbol
+            if not text.startswith("#"):
+                logger.warning(f"Invalid format - missing # symbol: '{text}'")
+                respond("Usage: `/unwatch #channel-name`\nPlease include the # symbol.")
+                return
+            
+            # Remove # and convert to lowercase
+            channel_name = text[1:].lower()
+            logger.info(f"Parsed channel name: '{channel_name}'")
+            
+            if not channel_name:
+                logger.warning("Empty channel name provided")
+                respond("Usage: `/unwatch #channel-name`")
+                return
+            
+            # Validate channel name
+            is_valid, error_msg = validate_channel_name(channel_name)
+            if not is_valid:
+                logger.warning(f"Invalid channel name: {error_msg}")
+                respond(f"❌ {error_msg}")
+                return
+            
+            logger.info("Channel name validated successfully")
+            
+            # Load, update, save
+            logger.info("Loading existing data...")
+            data = load_data()
+            user_data = data.get(user_id, {"channels": []})
+            logger.info(f"User currently monitoring {len(user_data['channels'])} channels")
+
+            if channel_name not in user_data["channels"]:
+                logger.info(f"Channel #{channel_name} not in watchlist")
+                respond(f"Channel *#{channel_name}* is not in your watchlist.")
+            else:
+                logger.info(f"Removing channel #{channel_name} from watchlist...")
+                user_data["channels"].remove(channel_name)
+                data[user_id] = user_data
+                
+                if not save_data(data):
+                    logger.error("Failed to save data to Redis")
+                    respond("❌ Error saving data. Please try again.")
+                    return
+                
+                logger.info(f"✅ Successfully removed #{channel_name} for user {user_id}")
+                respond(f"🗑️ Removed *#{channel_name}* from your watchlist.")
+        
+        except Exception as e:
+            logger.error(f"FATAL ERROR in /unwatch command: {e}")
+            logger.error(traceback.format_exc())
+            try:
+                respond(f"❌ An unexpected error occurred. Please try again or contact support.\nError: {str(e)}")
+            except:
+                logger.error("Failed to send error response to user")
+            raise
+
+    @app.command("/list")
+    def list_channels(ack, respond, command):
+        try:
+            logger.info("=== /list command received ===")
+            logger.info(f"Command payload: {json.dumps(command, default=str)}")
+            
+            ack()
+            logger.info("Command acknowledged")
+            
+            user_id = command["user_id"]
+            logger.info(f"User ID: {user_id}")
+            
+            logger.info("Loading existing data...")
+            data = load_data()
+            user_data = data.get(user_id, {"channels": []})
+            channels = user_data["channels"]
+            logger.info(f"User is monitoring {len(channels)} channels")
+
+            if not channels:
+                logger.info("User has no channels in watchlist")
+                respond("You're not monitoring any channels yet.")
+            else:
+                channels_list = "\n".join(f"• #{c}" for c in channels)
+                logger.info(f"Sending list of {len(channels)} channels to user")
+                respond(f"👀 You're currently monitoring:\n{channels_list}")
+        
+        except Exception as e:
+            logger.error(f"FATAL ERROR in /list command: {e}")
+            logger.error(traceback.format_exc())
+            try:
+                respond(f"❌ An unexpected error occurred. Please try again or contact support.\nError: {str(e)}")
+            except:
+                logger.error("Failed to send error response to user")
+            raise
+    
+    print("✓ All Slack commands registered successfully", flush=True)
+else:
+    print("⚠ WARNING: Slack app not initialized, commands not registered", flush=True)
+    logger.warning("Slack app not initialized, commands not registered")
 
 # ---------- Flask routes for Vercel ----------
 @flask_app.route("/", methods=["GET"])
@@ -365,3 +400,8 @@ def list_route():
 
 # For Vercel serverless
 app_handler = flask_app
+
+print("=" * 80, flush=True)
+print("✓ BOT.PY MODULE LOADED SUCCESSFULLY", flush=True)
+print("=" * 80, flush=True)
+logger.info("Bot module loaded successfully and ready to serve requests")
