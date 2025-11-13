@@ -1,10 +1,10 @@
 import os
 import json
 import redis
+from flask import Flask, request
 from slack_bolt import App
-from slack_bolt.adapter.aws_lambda import SlackRequestHandler
+from slack_bolt.adapter.flask import SlackRequestHandler
 
-# Print for debugging
 print("Loading watch.py module...", flush=True)
 
 # Environment variables
@@ -20,16 +20,18 @@ try:
         socket_timeout=5,
         decode_responses=False
     ) if REDIS_URL else None
+    print("Redis initialized", flush=True)
 except Exception as e:
     print(f"Redis connection error: {e}", flush=True)
     r = None
 
 # Initialize Slack App
-app = App(
+slack_app = App(
     token=SLACK_BOT_TOKEN,
     signing_secret=SLACK_SIGN_SECRET,
     process_before_response=True  # Important for serverless
 )
+print("Slack app initialized", flush=True)
 
 DATA_KEY = "user_data"
 
@@ -55,7 +57,7 @@ def save_data(data):
         print(f"Error saving data: {e}", flush=True)
         return False
 
-@app.command("/watch")
+@slack_app.command("/watch")
 def handle_watch(ack, respond, command):
     try:
         print(f"Watch command received from user {command['user_id']}", flush=True)
@@ -100,11 +102,13 @@ def handle_watch(ack, respond, command):
         print(f"Error in watch command: {e}", flush=True)
         respond(f"❌ An error occurred: {str(e)}")
 
-# Vercel serverless handler
-handler = SlackRequestHandler(app)
+# Flask app for Vercel
+app = Flask(__name__)
+handler = SlackRequestHandler(slack_app)
 
-def handle(request):
-    """Main handler for Vercel"""
-    print("Watch handler called", flush=True)
+@app.route("/", methods=["POST"])
+def slack_events():
+    print("Watch endpoint called", flush=True)
     return handler.handle(request)
 
+print("Watch module loaded successfully", flush=True)
