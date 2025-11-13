@@ -1,3 +1,4 @@
 flask==3.0.3
 slack-bolt==1.19.0
 redis==5.0.7
+slack-sdk==3.33.1

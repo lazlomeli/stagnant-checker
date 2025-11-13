@@ -1,5 +1,5 @@
 from flask import Flask, request
-from api.slack_bot import create_bolt_handler
+from slack_bot import create_bolt_handler
 
 app = Flask(__name__)
 handler = create_bolt_handler()
