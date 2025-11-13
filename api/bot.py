@@ -74,7 +74,7 @@ logger.info("Initializing Slack App...")
 try:
     if not SLACK_BOT_TOKEN or not SLACK_SIGN_SECRET:
         raise ValueError("SLACK_BOT_TOKEN or SLACK_SIGN_SECRET not provided")
-    app = App(token=SLACK_BOT_TOKEN, signing_secret=SLACK_SIGN_SECRET)
+    slack_app = App(token=SLACK_BOT_TOKEN, signing_secret=SLACK_SIGN_SECRET)
     print("✓ Slack App initialized successfully", flush=True)
     logger.info("Slack App initialized successfully")
 except Exception as e:
@@ -83,11 +83,11 @@ except Exception as e:
     logger.error(f"Slack App initialization error: {e}")
     logger.debug(traceback.format_exc())
     # Create a dummy app to prevent crashes
-    app = None
+    slack_app = None
 
 print("Creating Flask app...", flush=True)
-flask_app = Flask(__name__)
-handler = SlackRequestHandler(app) if app else None
+app = Flask(__name__)  # Vercel expects this to be named 'app'
+handler = SlackRequestHandler(slack_app) if slack_app else None
 print(f"Handler created: {handler is not None}", flush=True)
 
 DATA_KEY = "user_data"
@@ -157,9 +157,9 @@ def validate_channel_name(channel_name):
 # ---------- Commands ----------
 print("Registering Slack commands...", flush=True)
 
-# Only register commands if app is initialized
-if app:
-    @app.command("/watch")
+# Only register commands if slack_app is initialized
+if slack_app:
+    @slack_app.command("/watch")
     def add_channel(ack, respond, command):
         try:
             logger.info("=== /watch command received ===")
@@ -233,7 +233,7 @@ if app:
                 logger.error("Failed to send error response to user")
             raise
 
-    @app.command("/unwatch")
+    @slack_app.command("/unwatch")
     def unwatch(ack, respond, command):
         try:
             logger.info("=== /unwatch command received ===")
@@ -301,7 +301,7 @@ if app:
                 logger.error("Failed to send error response to user")
             raise
 
-    @app.command("/list")
+    @slack_app.command("/list")
     def list_channels(ack, respond, command):
         try:
             logger.info("=== /list command received ===")
@@ -342,19 +342,19 @@ else:
     logger.warning("Slack app not initialized, commands not registered")
 
 # ---------- Flask routes for Vercel ----------
-@flask_app.route("/", methods=["GET"])
+@app.route("/", methods=["GET"])
 def health_check():
     """Health check endpoint."""
     logger.info("Health check endpoint called")
     status = {
         "status": "running",
-        "slack_configured": bool(SLACK_BOT_TOKEN and app),
+        "slack_configured": bool(SLACK_BOT_TOKEN and slack_app),
         "redis_configured": bool(REDIS_URL and r),
     }
     logger.debug(f"Health check status: {status}")
     return status, 200
 
-@flask_app.route("/watch", methods=["POST"])
+@app.route("/watch", methods=["POST"])
 def watch_route():
     logger.info("=== /watch route called ===")
     logger.debug(f"Request headers: {dict(request.headers)}")
@@ -373,7 +373,7 @@ def watch_route():
         logger.error(traceback.format_exc())
         raise
 
-@flask_app.route("/unwatch", methods=["POST"])
+@app.route("/unwatch", methods=["POST"])
 def unwatch_route():
     logger.info("=== /unwatch route called ===")
     logger.debug(f"Request headers: {dict(request.headers)}")
@@ -392,7 +392,7 @@ def unwatch_route():
         logger.error(traceback.format_exc())
         raise
 
-@flask_app.route("/list", methods=["POST"])
+@app.route("/list", methods=["POST"])
 def list_route():
     logger.info("=== /list route called ===")
     logger.debug(f"Request headers: {dict(request.headers)}")
@@ -411,16 +411,16 @@ def list_route():
         logger.error(traceback.format_exc())
         raise
 
-# For Vercel serverless - export the Flask app
-app_handler = flask_app
+# Vercel will automatically use 'app' as the WSGI application
+# No need to export anything else
 
 print("=" * 80, file=sys.stderr, flush=True)
 print("=" * 80, file=sys.stdout, flush=True)
 print("✓ BOT.PY MODULE LOADED SUCCESSFULLY", file=sys.stderr, flush=True)
 print("✓ BOT.PY MODULE LOADED SUCCESSFULLY", file=sys.stdout, flush=True)
-print(f"✓ Flask app: {flask_app}", file=sys.stderr, flush=True)
-print(f"✓ Handler: {handler}", file=sys.stderr, flush=True)
-print(f"✓ App: {app}", file=sys.stderr, flush=True)
+print(f"✓ Flask app: {app}", file=sys.stderr, flush=True)
+print(f"✓ Slack handler: {handler}", file=sys.stderr, flush=True)
+print(f"✓ Slack app: {slack_app}", file=sys.stderr, flush=True)
 print("=" * 80, file=sys.stderr, flush=True)
 print("=" * 80, file=sys.stdout, flush=True)
 logger.info("Bot module loaded successfully and ready to serve requests")
