@@ -1,259 +1,154 @@
-# slack_bot.py
 import os
 import re
 import json
 import logging
 import traceback
-
 import redis
 from slack_bolt import App
 
-# ---------- Logging ----------
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
+    format="%(asctime)s [%(levelname)s] %(message)s",
 )
 logger = logging.getLogger(__name__)
-logger.info("Loading slack_bot.py")
 
-# ---------- Environment ----------
-SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN", "")
-SLACK_SIGN_SECRET = os.environ.get("SLACK_SIGN_SECRET", "")
-REDIS_URL = os.environ.get("REDIS_URL", "")
-
-logger.info(
-    "Env loaded | SLACK_BOT_TOKEN: %s | SLACK_SIGN_SECRET: %s | REDIS_URL: %s",
-    "✓" if SLACK_BOT_TOKEN else "✗",
-    "✓" if SLACK_SIGN_SECRET else "✗",
-    "✓" if REDIS_URL else "✗",
-)
-
-if not SLACK_BOT_TOKEN or not SLACK_SIGN_SECRET:
-    logger.error("Slack tokens missing – set SLACK_BOT_TOKEN and SLACK_SIGN_SECRET")
-
-# ---------- Redis ----------
 DATA_KEY = "user_data"
-r = None
 
-if REDIS_URL:
+
+def get_redis():
+    url = os.environ.get("REDIS_URL")
+    if not url:
+        logger.warning("REDIS_URL missing")
+        return None
+
     try:
-        logger.info("Initializing Redis...")
         r = redis.Redis.from_url(
-            REDIS_URL,
+            url,
             socket_connect_timeout=5,
             socket_timeout=5,
             decode_responses=False,
         )
-        # Test connection
         r.ping()
-        logger.info("Connected to Redis successfully")
+        return r
     except Exception as e:
-        logger.error("Redis connection error: %s", e)
-        logger.debug(traceback.format_exc())
-        r = None
-else:
-    logger.warning("REDIS_URL not set – Redis is disabled")
-
-# ---------- Storage Helpers ----------
-def load_data():
-    """Load user data from Redis with error handling."""
-    if not r:
-        logger.error("Cannot load data: Redis connection is not available")
-        return {}
-
-    try:
-        raw = r.get(DATA_KEY)
-        data = json.loads(raw) if raw else {}
-        logger.debug("Data loaded. Users: %d", len(data))
-        return data
-    except Exception as e:
-        logger.error("Error loading data from Redis: %s", e)
-        logger.debug(traceback.format_exc())
-        return {}
+        logger.error(f"Redis error: {e}")
+        return None
 
 
-def save_data(data):
-    """Save user data to Redis."""
-    if not r:
-        logger.error("Cannot save data: Redis connection is not available")
-        return False
-
-    try:
-        r.set(DATA_KEY, json.dumps(data))
-        logger.debug("Data saved. Users: %d", len(data))
-        return True
-    except Exception as e:
-        logger.error("Error saving data to Redis: %s", e)
-        logger.debug(traceback.format_exc())
-        return False
-
-
-def validate_channel_name(channel_name):
-    """
-    Validate and sanitize channel name according to Slack's naming rules.
-    Returns (is_valid, error_message_or_None)
-    """
-    if not channel_name:
+def validate_channel_name(name):
+    if not name:
         return False, "Channel name cannot be empty"
-
-    # Slack channel rules: lowercase letters, numbers, hyphens, underscores, max 80 chars
-    if not re.match(r"^[a-z0-9\-_]{1,80}$", channel_name):
+    if not re.match(r"^[a-z0-9\-_]{1,80}$", name):
         return False, (
             "Invalid channel name. Channel names must:\n"
             "• Be 1-80 characters long\n"
-            "• Only contain lowercase letters, numbers, hyphens, and underscores\n"
-            "• Not contain spaces or special characters"
+            "• Only contain lowercase letters, numbers, hyphens, and underscores"
         )
-
     return True, None
 
 
-# ---------- Slack Bolt App ----------
-# Provide dummy values if not set to prevent init errors
-bolt_app = App(
-    token=SLACK_BOT_TOKEN or "xoxb-dummy",
-    signing_secret=SLACK_SIGN_SECRET or "dummy-secret",
-)
-
-if not (SLACK_BOT_TOKEN and SLACK_SIGN_SECRET):
-    logger.warning("Slack App initialized with dummy credentials – will fail in production")
-
-logger.info("Registering Slack commands...")
-
-
-@bolt_app.command("/watch")
-def cmd_watch(ack, respond, command):
-    try:
-        logger.info("=== /watch command ===")
-        logger.info("Payload: %s", json.dumps(command, default=str))
-
-        ack()  # acknowledge quickly
-
+def register_commands(app, r):
+    @app.command("/watch")
+    def watch_cmd(ack, respond, command):
+        ack()
         user_id = command["user_id"]
         text = command.get("text", "").strip()
 
         if not text.startswith("#"):
-            respond("Usage: `/watch #channel-name`\nPlease include the # symbol.")
+            respond("Usage: /watch #channel")
             return
 
-        channel_name = text[1:].lower()
+        channel = text[1:].lower()
+        ok, msg = validate_channel_name(channel)
 
-        if not channel_name:
-            respond("Usage: `/watch #channel-name`")
+        if not ok:
+            respond(f"❌ {msg}")
             return
 
-        is_valid, error_msg = validate_channel_name(channel_name)
-        if not is_valid:
-            respond(f"❌ {error_msg}")
+        data = load_data(r)
+        user = data.get(user_id, {"channels": []})
+
+        if channel in user["channels"]:
+            respond(f"Already watching #{channel}")
             return
 
-        data = load_data()
-        user_data = data.get(user_id, {"channels": []})
+        user["channels"].append(channel)
+        data[user_id] = user
 
-        if channel_name in user_data["channels"]:
-            respond(f"Channel *#{channel_name}* is already being monitored.")
+        if not save_data(r, data):
+            respond("Redis error")
             return
 
-        if len(user_data["channels"]) >= 50:
-            respond("❌ You've reached the maximum of 50 monitored channels.")
-            return
+        respond(f"Watching #{channel}")
 
-        user_data["channels"].append(channel_name)
-        data[user_id] = user_data
-
-        if not save_data(data):
-            respond("❌ Error saving data. Please try again.")
-            return
-
-        respond(f"✅ Added *#{channel_name}* to your personal watchlist.")
-    except Exception as e:
-        logger.error("Error in /watch: %s", e)
-        logger.error(traceback.format_exc())
-        respond(
-            "❌ An unexpected error occurred. Please try again or contact support.\n"
-            f"Error: {e}"
-        )
-
-
-@bolt_app.command("/unwatch")
-def cmd_unwatch(ack, respond, command):
-    try:
-        logger.info("=== /unwatch command ===")
-        logger.info("Payload: %s", json.dumps(command, default=str))
-
+    @app.command("/unwatch")
+    def unwatch_cmd(ack, respond, command):
         ack()
-
         user_id = command["user_id"]
         text = command.get("text", "").strip()
 
         if not text.startswith("#"):
-            respond("Usage: `/unwatch #channel-name`\nPlease include the # symbol.")
+            respond("Usage: /unwatch #channel")
             return
 
-        channel_name = text[1:].lower()
+        channel = text[1:].lower()
 
-        if not channel_name:
-            respond("Usage: `/unwatch #channel-name`")
+        data = load_data(r)
+        user = data.get(user_id, {"channels": []})
+
+        if channel not in user["channels"]:
+            respond(f"#{channel} is not watched")
             return
 
-        is_valid, error_msg = validate_channel_name(channel_name)
-        if not is_valid:
-            respond(f"❌ {error_msg}")
+        user["channels"].remove(channel)
+        data[user_id] = user
+
+        if not save_data(r, data):
+            respond("Redis error")
             return
 
-        data = load_data()
-        user_data = data.get(user_id, {"channels": []})
+        respond(f"Unwatched #{channel}")
 
-        if channel_name not in user_data["channels"]:
-            respond(f"Channel *#{channel_name}* is not in your watchlist.")
-            return
-
-        user_data["channels"].remove(channel_name)
-        data[user_id] = user_data
-
-        if not save_data(data):
-            respond("❌ Error saving data. Please try again.")
-            return
-
-        respond(f"🗑️ Removed *#{channel_name}* from your watchlist.")
-    except Exception as e:
-        logger.error("Error in /unwatch: %s", e)
-        logger.error(traceback.format_exc())
-        respond(
-            "❌ An unexpected error occurred. Please try again or contact support.\n"
-            f"Error: {e}"
-        )
-
-
-@bolt_app.command("/list")
-def cmd_list(ack, respond, command):
-    try:
-        logger.info("=== /list command ===")
-        logger.info("Payload: %s", json.dumps(command, default=str))
-
+    @app.command("/list")
+    def list_cmd(ack, respond, command):
         ack()
-
         user_id = command["user_id"]
 
-        data = load_data()
-        user_data = data.get(user_id, {"channels": []})
-        channels = user_data["channels"]
+        data = load_data(r)
+        user = data.get(user_id, {"channels": []})
 
-        if not channels:
-            respond("You're not monitoring any channels yet.")
+        if not user["channels"]:
+            respond("No watched channels")
             return
 
-        channels_list = "\n".join(f"• #{c}" for c in channels)
-        respond(f"👀 You're currently monitoring:\n{channels_list}")
-    except Exception as e:
-        logger.error("Error in /list: %s", e)
-        logger.error(traceback.format_exc())
-        respond(
-            "❌ An unexpected error occurred. Please try again or contact support.\n"
-            f"Error: {e}"
-        )
+        items = "\n".join(f"• #{c}" for c in user["channels"])
+        respond(f"Watched channels:\n{items}")
 
 
-logger.info("Slack commands registered and bolt_app ready")
+def load_data(r):
+    raw = r.get(DATA_KEY)
+    return json.loads(raw) if raw else {}
 
+
+def save_data(r, data):
+    try:
+        r.set(DATA_KEY, json.dumps(data))
+        return True
+    except:
+        return False
+
+
+def create_bolt_handler():
+    """Factory for Vercel serverless calls."""
+    logger.info("Initializing Bolt App")
+
+    app = App(
+        token=os.environ.get("SLACK_BOT_TOKEN"),
+        signing_secret=os.environ.get("SLACK_SIGN_SECRET"),
+    )
+
+    r = get_redis()
+    register_commands(app, r)
+
+    from slack_bolt.adapter.flask import SlackRequestHandler
+    return SlackRequestHandler(app)
